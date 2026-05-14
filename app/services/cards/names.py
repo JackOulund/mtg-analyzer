@@ -13,13 +13,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.card import Card
-from app.services import scryfall
+from app.services.cards import scryfall
 
 
 def normalize(name: str) -> str:
     """Lowercase, strip punctuation, collapse whitespace."""
     name = name.lower()
-    name = re.sub(r"[^\w\s]", "", name)   # remove punctuation
+    name = re.sub(r"[^\w\s]", "", name)    # remove punctuation
     name = re.sub(r"\s+", " ", name).strip()
     return name
 

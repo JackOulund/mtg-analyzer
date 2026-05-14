@@ -106,8 +106,20 @@ class GameAnalysis(BaseModel):
     turns: list[TurnData] = []
 
 
-# ── Internal helper for Stage 1 structured output ───────────────────────────
+# ── Internal helpers for Stage 1 structured output ──────────────────────────
+
+class _ChunkBoundary(BaseModel):
+    """
+    What Stage 1 actually asks Claude to produce — boundaries only, no text.
+    The pipeline reconstructs TranscriptChunk.text from the original segments
+    so we never ask Claude to echo back the (potentially huge) transcript.
+    """
+    chunk_index: int
+    start_seconds: float
+    end_seconds: float
+    estimated_context: str   # e.g. "Turn 3 — Alice's main phase"
+
 
 class _ChunkList(BaseModel):
     """Wrapper so Stage 1 can return a list via structured output."""
-    chunks: list[TranscriptChunk]
+    chunks: list[_ChunkBoundary]

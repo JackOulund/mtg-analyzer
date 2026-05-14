@@ -2,14 +2,9 @@
 Three-stage MTG Commander analysis pipeline.
 
 Stage 1 (Haiku)  — split transcript into logical turn chunks
-Stage 2 (Haiku)  — analyse each chunk in parallel (transcript-only in v1)
+Stage 2 (Haiku)  — analyse each chunk in parallel
 Stage 3 (Sonnet) — aggregate all chunks into a final GameAnalysis
-
-Call shape mirrors moodyapi:
-    client.messages.parse(..., output_format=PydanticModel)
-    response.parsed_output
 """
-
 import asyncio
 import json
 import logging
@@ -21,11 +16,11 @@ from app.schemas.analysis import (
     ChunkAnalysis,
     GameAnalysis,
     TranscriptChunk,
-    ZoneSnapshot,
-    CardInteraction,
+    _ChunkBoundary,
+    _ChunkList,
 )
-from app.schemas.apify.youtube import TranscriptSegment
-from app.services.mocks.claude import (
+from app.schemas.youtube import TranscriptSegment
+from app.services.analysis.mock import (
     MOCK_GAME_ANALYSIS,
     mock_analyze_chunk,
     mock_split_into_chunks,
@@ -38,35 +33,61 @@ logger = logging.getLogger(__name__)
 
 STAGE1_SYSTEM = """\
 You are an expert Magic: The Gathering rules analyst.
-Given a timestamped transcript of a Commander game, split it into logical chunks.
+Given a timestamped transcript of a Commander game, identify the logical chunk boundaries.
 Each chunk should correspond to roughly one player's turn or a major interaction.
-Preserve the start_seconds and end_seconds from the transcript segments.
-Return the chunks in order."""
+For each chunk return ONLY: chunk_index, start_seconds, end_seconds, and a brief estimated_context label.
+Do NOT reproduce any transcript text — boundaries and labels only."""
 
 
-async def split_into_chunks(
+def _build_chunks_from_boundaries(
+    boundaries: list[_ChunkBoundary],
     segments: list[TranscriptSegment],
 ) -> list[TranscriptChunk]:
+    """
+    Reconstruct TranscriptChunk objects by slicing the original segments
+    according to the boundaries Claude identified.  This avoids asking Claude
+    to echo back the (potentially enormous) transcript in its output.
+    """
+    chunks: list[TranscriptChunk] = []
+    sorted_segs = sorted(segments, key=lambda s: s.start_seconds)
+
+    for boundary in boundaries:
+        matching = [
+            s for s in sorted_segs
+            if s.start_seconds >= boundary.start_seconds
+            and s.start_seconds <= boundary.end_seconds
+        ]
+        text = " ".join(s.text for s in matching) if matching else ""
+        chunks.append(TranscriptChunk(
+            chunk_index=boundary.chunk_index,
+            start_seconds=boundary.start_seconds,
+            end_seconds=boundary.end_seconds,
+            estimated_context=boundary.estimated_context,
+            text=text,
+        ))
+
+    return chunks
+
+
+async def split_into_chunks(segments: list[TranscriptSegment]) -> list[TranscriptChunk]:
     if settings.mock_external:
         return mock_split_into_chunks(segments)
 
-    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-
+    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key, max_retries=6)
     formatted = "\n".join(
         f"[{seg.start_seconds:.1f}s - {seg.end_seconds:.1f}s] {seg.text}"
         for seg in segments
     )
-
-    from app.schemas.analysis import _ChunkList  # local import to keep top clean
-
-    response = client.messages.parse(
+    response = await client.messages.parse(
         model="claude-haiku-4-5",
         max_tokens=4096,
         system=STAGE1_SYSTEM,
         messages=[{"role": "user", "content": formatted}],
         output_format=_ChunkList,
     )
-    return response.parsed_output.chunks
+    boundaries = response.parsed_output.chunks
+    logger.info("Stage 1: %d boundaries received", len(boundaries))
+    return _build_chunks_from_boundaries(boundaries, segments)
 
 
 # ── Stage 2 ──────────────────────────────────────────────────────────────────
@@ -86,13 +107,11 @@ async def analyze_chunk(chunk: TranscriptChunk) -> ChunkAnalysis:
     if settings.mock_external:
         return mock_analyze_chunk(chunk)
 
-    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-
+    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key, max_retries=6)
     prompt = f"Context: {chunk.estimated_context}\n\nTranscript:\n{chunk.text}"
-
-    response = client.messages.parse(
+    response = await client.messages.parse(
         model="claude-haiku-4-5",
-        max_tokens=2048,
+        max_tokens=4096,
         system=STAGE2_SYSTEM,
         messages=[{"role": "user", "content": prompt}],
         output_format=ChunkAnalysis,
@@ -123,18 +142,14 @@ async def aggregate_game(
     if settings.mock_external:
         return MOCK_GAME_ANALYSIS
 
-    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-
+    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key, max_retries=6)
     context_header = f"Video: {title or 'Unknown'}\nDuration: {duration_seconds or 'Unknown'} seconds\n\n"
-    analyses_json = json.dumps(
-        [a.model_dump() for a in chunk_analyses],
-        indent=2,
-    )
+    analyses_json = json.dumps([a.model_dump() for a in chunk_analyses], indent=2)
     prompt = context_header + "Per-turn analyses:\n" + analyses_json
 
-    response = client.messages.parse(
+    response = await client.messages.parse(
         model="claude-sonnet-4-6",
-        max_tokens=8192,
+        max_tokens=16384,
         system=STAGE3_SYSTEM,
         messages=[{"role": "user", "content": prompt}],
         output_format=GameAnalysis,
@@ -150,28 +165,18 @@ async def run_pipeline(
     title: str | None,
     duration_seconds: int | None,
 ) -> GameAnalysis:
-    """
-    Convenience wrapper: runs all three stages and returns a GameAnalysis.
-    Concurrency for Stage 2 is bounded by settings.claude_max_concurrency.
-    """
-    logger.info(
-        "Stage 1: splitting transcript into chunks (%d segments)", len(segments)
-    )
+    """Run all three stages and return a GameAnalysis."""
+    logger.info("Stage 1: splitting transcript into chunks (%d segments)", len(segments))
     chunks = await split_into_chunks(segments)
     logger.info("Stage 1 complete: %d chunks", len(chunks))
 
-    logger.info(
-        "Stage 2: analysing %d chunks (concurrency=%d)",
-        len(chunks),
-        settings.claude_max_concurrency,
-    )
-    sem = asyncio.Semaphore(settings.claude_max_concurrency)
-
-    async def _one(c: TranscriptChunk) -> ChunkAnalysis:
-        async with sem:
-            return await analyze_chunk(c)
-
-    chunk_analyses = await asyncio.gather(*[_one(c) for c in chunks])
+    logger.info("Stage 2: analysing %d chunks sequentially", len(chunks))
+    chunk_analyses: list[ChunkAnalysis] = []
+    for i, chunk in enumerate(chunks):
+        logger.info("Stage 2: chunk %d/%d (%s)", i + 1, len(chunks), chunk.estimated_context)
+        chunk_analyses.append(await analyze_chunk(chunk))
+        if i < len(chunks) - 1:
+            await asyncio.sleep(settings.claude_stage2_delay_seconds)
     logger.info("Stage 2 complete")
 
     logger.info("Stage 3: aggregating into GameAnalysis")

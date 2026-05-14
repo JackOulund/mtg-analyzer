@@ -1,8 +1,8 @@
 """
-Mock responses for the Apify service.
+Mock YouTube transcript.
 Used when settings.mock_external is True.
 """
-from app.schemas.apify.youtube import TranscriptSegment, YouTubeTranscript
+from app.schemas.youtube import TranscriptSegment, YouTubeTranscript
 
 MOCK_TRANSCRIPT = YouTubeTranscript(
     video_id="dQw4w9WgXcQ",
