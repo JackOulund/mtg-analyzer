@@ -1,0 +1,17 @@
+meta {
+  name: Submit Game - Bad URL (422)
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{base_url}}/games
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "source_url": "https://notyoutube.com/video"
+  }
+}

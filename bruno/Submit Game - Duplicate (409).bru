@@ -1,0 +1,17 @@
+meta {
+  name: Submit Game - Duplicate (409)
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{base_url}}/games
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "source_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+  }
+}

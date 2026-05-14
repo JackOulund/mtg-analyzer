@@ -1,0 +1,24 @@
+meta {
+  name: Submit Game
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{base_url}}/games
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "source_url": "https://www.youtube.com/watch?v=BR9NLrlSIeY"
+  }
+}
+
+script:post-response {
+  if (res.status === 202) {
+    bru.setVar("game_id", res.body.id);
+    console.log("Game queued with id:", res.body.id);
+  }
+}
