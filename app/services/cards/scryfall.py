@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.card import Card
+from app.schemas.scryfall import ScryfallCard
 
 logger = logging.getLogger(__name__)
 
@@ -35,44 +36,41 @@ async def resolve_and_upsert(name: str, db: AsyncSession) -> Card:
         return card
 
     # 2. Fetch from Scryfall (fuzzy)
-    scryfall_data = await _fetch_scryfall(name)
+    scryfall_card = await _fetch_scryfall(name)
 
-    if scryfall_data is None:
+    if scryfall_card is None:
         # Graceful fallback — unknown card, insert minimal row
         card = Card(name=name)
         db.add(card)
         await db.flush()
         return card
 
-    canonical_name = scryfall_data.get("name", name)
-
     # 3. Check again by canonical name (may differ from input)
-    result = await db.execute(select(Card).where(Card.name == canonical_name))
+    result = await db.execute(select(Card).where(Card.name == scryfall_card.name))
     card = result.scalar_one_or_none()
     if card:
         return card
 
     # 4. Insert full card row
-    type_line = scryfall_data.get("type_line", "") or ""
     card = Card(
-        name=canonical_name,
-        mana_cost=scryfall_data.get("mana_cost"),
-        cmc=scryfall_data.get("cmc"),
-        type_line=type_line,
-        oracle_text=scryfall_data.get("oracle_text"),
-        power=scryfall_data.get("power"),
-        toughness=scryfall_data.get("toughness"),
-        loyalty=scryfall_data.get("loyalty"),
-        colors="".join(scryfall_data.get("colors", [])),
-        is_land="Land" in type_line,
-        scryfall_id=scryfall_data.get("id"),
+        name=scryfall_card.name,
+        mana_cost=scryfall_card.mana_cost,
+        cmc=scryfall_card.cmc,
+        type_line=scryfall_card.type_line,
+        oracle_text=scryfall_card.oracle_text,
+        power=scryfall_card.power,
+        toughness=scryfall_card.toughness,
+        loyalty=scryfall_card.loyalty,
+        colors="".join(scryfall_card.colors),
+        is_land="Land" in scryfall_card.type_line,
+        scryfall_id=scryfall_card.id,
     )
     db.add(card)
     await db.flush()
     return card
 
 
-async def _fetch_scryfall(name: str) -> dict | None:
+async def _fetch_scryfall(name: str) -> ScryfallCard | None:
     """
     Call the Scryfall fuzzy endpoint. Returns None on 404.
     Retries with exponential backoff on 429, and always sleeps
@@ -97,5 +95,5 @@ async def _fetch_scryfall(name: str) -> dict | None:
                 continue
             resp.raise_for_status()
             await asyncio.sleep(_SCRYFALL_DELAY_S)
-            return resp.json()
+            return ScryfallCard.model_validate(resp.json())
     return None  # unreachable, satisfies type checker

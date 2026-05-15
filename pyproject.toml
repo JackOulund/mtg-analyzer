@@ -18,3 +18,14 @@ dependencies = [
     "sqlalchemy>=2.0.48",
     "uvicorn>=0.39.0",
 ]
+
+[tool.pyright]
+pythonVersion = "3.12"
+venvPath = "."
+venv = ".venv"
+include = ["app"]
+exclude = ["alembic"]
+typeCheckingMode = "standard"
+
+# apify-client and several other deps ship no stubs — suppress the noise
+reportMissingTypeStubs = false
