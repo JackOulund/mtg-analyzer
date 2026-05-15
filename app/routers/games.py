@@ -16,7 +16,7 @@ from app.database import get_db
 from app.models.game import Game
 from app.models.turn import Turn
 from app.schemas.game import GameCreate, GameListItem, GameResponse
-from app.services.youtube.apify import extract_video_id
+from app.services.youtube.parsing import extract_video_id
 from app.services.analysis.pipeline import run_analysis
 
 logger = logging.getLogger(__name__)

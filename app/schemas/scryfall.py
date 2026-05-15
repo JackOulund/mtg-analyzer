@@ -21,6 +21,6 @@ class ScryfallCard(BaseModel):
 
     @field_validator("type_line", mode="before")
     @classmethod
-    def coerce_none_to_empty(cls, v: object) -> str:
+    def coerce_none_to_empty(cls, v: str | None) -> str:
         """Scryfall occasionally omits type_line on tokens; treat as empty."""
         return v or ""

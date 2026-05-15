@@ -16,10 +16,10 @@ from app.schemas.analysis import (
     ChunkAnalysis,
     GameAnalysis,
     TranscriptChunk,
-    _ChunkBoundary,
     _ChunkList,
 )
 from app.schemas.youtube import TranscriptSegment
+from app.services.analysis.chunks import build_chunks_from_boundaries
 from app.services.analysis.mock import (
     MOCK_GAME_ANALYSIS,
     mock_analyze_chunk,
@@ -37,36 +37,6 @@ Given a timestamped transcript of a Commander game, identify the logical chunk b
 Each chunk should correspond to roughly one player's turn or a major interaction.
 For each chunk return ONLY: chunk_index, start_seconds, end_seconds, and a brief estimated_context label.
 Do NOT reproduce any transcript text — boundaries and labels only."""
-
-
-def _build_chunks_from_boundaries(
-    boundaries: list[_ChunkBoundary],
-    segments: list[TranscriptSegment],
-) -> list[TranscriptChunk]:
-    """
-    Reconstruct TranscriptChunk objects by slicing the original segments
-    according to the boundaries Claude identified.  This avoids asking Claude
-    to echo back the (potentially enormous) transcript in its output.
-    """
-    chunks: list[TranscriptChunk] = []
-    sorted_segs = sorted(segments, key=lambda s: s.start_seconds)
-
-    for boundary in boundaries:
-        matching = [
-            s for s in sorted_segs
-            if s.start_seconds >= boundary.start_seconds
-            and s.start_seconds <= boundary.end_seconds
-        ]
-        text = " ".join(s.text for s in matching) if matching else ""
-        chunks.append(TranscriptChunk(
-            chunk_index=boundary.chunk_index,
-            start_seconds=boundary.start_seconds,
-            end_seconds=boundary.end_seconds,
-            estimated_context=boundary.estimated_context,
-            text=text,
-        ))
-
-    return chunks
 
 
 async def split_into_chunks(segments: list[TranscriptSegment]) -> list[TranscriptChunk]:
@@ -87,7 +57,7 @@ async def split_into_chunks(segments: list[TranscriptSegment]) -> list[Transcrip
     )
     boundaries = response.parsed_output.chunks
     logger.info("Stage 1: %d boundaries received", len(boundaries))
-    return _build_chunks_from_boundaries(boundaries, segments)
+    return build_chunks_from_boundaries(boundaries, segments)
 
 
 # ── Stage 2 ──────────────────────────────────────────────────────────────────
